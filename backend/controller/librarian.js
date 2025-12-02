@@ -44,42 +44,67 @@ librarianController.approveRequest = async (req, res) => {
   const requestId = req.params.id;
 
   try {
+    // 1) Load borrow
     const borrowRequest = await BorrowModel.findById(requestId);
     if (!borrowRequest) {
       return res.status(404).json({ error: "Borrow request not found" });
     }
 
+    // Only approve if it's actually a "Requested"
+    if (borrowRequest.status !== "Requested") {
+      return res.status(400).json({ error: `Cannot approve request in status "${borrowRequest.status}"` });
+    }
+
+    // 2) Check user's issued count
     const issuedCount = await BorrowModel.countDocuments({
       userId: borrowRequest.userId,
       status: "Issued",
     });
-
     if (issuedCount >= 4) {
       return res.status(400).json({ error: "User already has 4 issued books" });
     }
 
+    // 3) Load book
     const book = await BookModel.findById(borrowRequest.bookId);
     if (!book) {
       return res.status(404).json({ error: "Book not found" });
     }
 
-    if (book.availableCopies < 1) {
+    // Normalize availableCopies if missing/invalid
+    let available = Number.isFinite(book.availableCopies)
+      ? Number(book.availableCopies)
+      : Number(book.totalCopies ?? 0);
+
+    if (!Number.isFinite(available)) available = 0;
+
+    if (available < 1) {
       return res.status(400).json({ error: "No copies available" });
     }
 
-    book.availableCopies -= 1;
-    await book.save();
-
+    // 4) Approve the borrow
     borrowRequest.status = "Issued";
-    borrowRequest.approvedBy = req.userInfo.id;
+    borrowRequest.issueDate = new Date();
+    // standard: 15 days loan
+    borrowRequest.dueDate = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+    borrowRequest.approvedBy = req.userInfo?.id;
+
+    // Save borrow first (so we know it's valid)
     await borrowRequest.save();
+
+    // 5) Atomically decrement availableCopies to avoid NaN races
+    await BookModel.updateOne(
+      { _id: book._id, availableCopies: { $gte: 1 } },
+      { $inc: { availableCopies: -1 } }
+    );
+
     clearCache("homeData");
-    res.json({ message: "Book issued successfully", borrow: borrowRequest });
+    return res.status(200).json({ message: "Book issued successfully", borrow: borrowRequest });
   } catch (err) {
-    console.error("Error approving request", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("Error approving request:", err);
+    return res.status(500).json({ error: "Server error", details: err.message });
   }
 };
+
 
 librarianController.returnRequest = async (req, res) => {
   try {

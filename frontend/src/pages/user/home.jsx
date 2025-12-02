@@ -1,211 +1,332 @@
-import React, { useState, useEffect } from "react";
-import { Server_URL } from "../../utils/config";
-import axios from "axios";
-import "./home.css";
-import { Link } from "react-router-dom";
-import { FiBook, FiSearch, FiClock, FiUser, FiCalendar } from "react-icons/fi";
-import Preloader from "../../components/Preloader";
+import { useEffect, useState } from "react";
+import api from "../../lib/api";
+
+// --- simple helpers ---
+const num = (v) => (Number.isFinite(+v) ? +v : 0);
+const byCategories = (books = []) => {
+  const map = new Map();
+  for (const b of books) {
+    const key = b?.category || "Uncategorized";
+    const entry = map.get(key) || {
+      name: key,
+      booksCount: 0,
+      // pick first non-empty cover as thumbnail
+      image: b?.coverImage || "",
+    };
+    entry.booksCount += 1;
+    if (!entry.image && b?.coverImage) entry.image = b.coverImage;
+    map.set(key, entry);
+  }
+  return Array.from(map.values());
+};
 
 export default function Home() {
-  const [categories, setCategories] = useState([]);
-  const [newArrivals, setNewArrivals] = useState([]);
-  const [stats, setStats] = useState({
-    totalBooks: 0,
-    availableBooks: 0,
-    students: 0
-  });
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  // const fetchData = async () => {
-  //   try {
-
-  //     setLoading(true);
-  //     const categoriesResponse = await axios.get(Server_URL + 'books');
-  //     if (categoriesResponse.data.error) {
-  //       alert(categoriesResponse.data.message);
-  //     } else {
-  //       console.log("category")
-  //       console.log(categoriesResponse.data.books)
-  //       const {books} = categoriesResponse.data;
-
-  //       const categoryCountMap = {};
-  //     books.forEach((book) => {
-  //       const cat = book.category;
-  //       categoryCountMap[cat] = (categoryCountMap[cat] || 0) + 1;
-  //     });
-
-  //     setCategoryCount(categoryCountMap);
-
-  //       setCategories(books);
-  //     }
-
-      
-  //     const arrivalsResponse = await axios.get(Server_URL + 'books/new');
-  //     console.log(arrivalsResponse);
-  //     if (!arrivalsResponse.data.error) {
-  //       setNewArrivals(arrivalsResponse.data.books);
-  //       setStats(arrivalsResponse.data);
-  //     }
-
-  //   } catch (error) {
-  //     console.error("Error fetching data:", error);
-  //   }
-  //    finally {
-  //     setLoading(false);
-  //   }
-  // };
-
-
- const fetchData = React.useCallback(async () => {
-  try {
-    setLoading(true);
-    const { data } = await axios.get(Server_URL + "home");
-    if (!data.error) {
-      setStats(data.stats);
-      setCategories(data.categories);
-      setNewArrivals(data.newArrivals);
-    }
-  } catch (error) {
-    console.error("Error fetching data:", error);
-  } finally {
-    setLoading(false);
-  }
-}, []);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    let alive = true;
+    (async () => {
+      try {
+        const res = await api.get("/home");
+        const d = res?.data?.data ?? res?.data ?? {};
+        if (alive) setData(d);
+      } catch (e) {
+        if (alive) setErr(e?.response?.data?.message || "Failed to load data");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => (alive = false);
+  }, []);
 
-   if (loading) return <Preloader />;  
+  if (loading) return <div style={{ padding: 16 }}>Loading…</div>;
+  if (!data) return <div style={{ padding: 16, color: "#b91c1c" }}>{err}</div>;
+
+  const totalCategories =
+    data.totalCategories ?? data.categoriesCount ?? 0;
+  const totalBooks = data.totalBooks ?? data.booksCount ?? 0;
+  const totalActiveStudents =
+    data.totalActiveStudents ?? data.borrowersCount ?? 0;
+  const issuedCount = data.issuedCount ?? data.totalIssued ?? 0;
+  const books = Array.isArray(data.books) ? data.books : [];
+
+  const categories = byCategories(books); // derive cards like Vercel
+  const latest = books.slice(0, 8); // “New Arrivals”
 
   return (
-    <div className="library-homepage">
- 
-      <header className="hero-section">
-        <div className="hero-overlay"></div>
-        <div className="container hero-content">
-          <h1 className="hero-title">Welcome to College Central Library</h1>
-          <p className="hero-subtitle">Access academic resources, textbooks, and research materials</p>
-          
-          
-          
-          <div className="hero-buttons">
-            <Link to="/books" className="btn btn-primary">
-            <FiBook size={18} className="mr-2" />
-              Browse collections 
-            </Link>
-          
-          </div>
-        </div>
-      </header>
-
-     
-      <section className="stats-section">
-        <div className="container">
-          <div className="stats-grid">
-          <div className="stat-cardhome">
-              <FiBook className="stat-icon" />
-              <h3>{stats.totalCategories}+</h3>
-              <p>Total Categories</p>
-            </div>
-            <div className="stat-cardhome">
-              <FiBook className="stat-icon" />
-              <h3>{stats.totalBooks}+</h3>
-              <p>Total Books</p>
-            </div>
-           
-            <div className="stat-cardhome">
-              <FiUser className="stat-icon" />
-              <h3>{stats.totalActiveStudents}</h3>
-              <p>Active Students</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="categories-section">
-        <div className="container">
-          <h2 className="section-title">Browse By Categories</h2>
-          <p className="section-subtitle">Find resources for your courses</p>
-          
-          <div className="categories-grid">
-  {categories.map((cat, index) => (
-    <div key={index} className="category-card">
-      <div className="category-img-container">
-        <img 
-          src={cat.coverImage || "/images/default-subject.jpg"} 
-          alt={cat.category} 
-          loading="lazy"
-        />
-      </div>
-      <div className="category-info">
-        <h3>{cat.category}</h3>
-        <p>Books: {cat.count}</p>
-        <Link to={`/books?category=${cat.category}`} className="btn btn-outline">
-          View Collection
-        </Link>
-      </div>
-    </div>
-  ))}
-</div>
-
-          
-          <div className="text-center">
-            <Link to="/category" className="btn btn-view-all">
-              View All Categories
-            </Link>
+    <div style={{ fontFamily: "system-ui, Segoe UI, Roboto, sans-serif" }}>
+      {/* HERO */}
+      <section
+        style={{
+          position: "relative",
+          height: 380,
+          background:
+            "url(/library-bg.jpg) center/cover, linear-gradient(#111,#111)",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,.45)",
+            display: "grid",
+            placeItems: "center",
+            textAlign: "center",
+            color: "#fff",
+            padding: 24,
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: 40, fontWeight: 800, margin: 6 }}>
+              Welcome to College Central Library
+            </h1>
+            <p style={{ opacity: 0.9, marginBottom: 16 }}>
+              Access academic resources, textbooks, and research materials
+            </p>
+            <a
+              href="/books"
+              style={{
+                background: "#0d6efd",
+                color: "#fff",
+                padding: "10px 16px",
+                borderRadius: 8,
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                fontWeight: 600,
+              }}
+            >
+              <span role="img" aria-label="book">📘</span> Browse collections
+            </a>
           </div>
         </div>
       </section>
 
-    
-      <section className="na-section">
-  <div className="na-container">
-    <h2 className="na-heading">New Arrivals</h2>
-    <p className="na-subheading">Recently added to our collection</p>
-    
-    <div className="na-grid-container">  
-      {newArrivals.map((book, index) => (
-        <div key={index} className="na-book-item">
-          <div className="na-cover-wrapper">
-            <img 
-              src={book.coverImage || "/images/default-book.jpg"} 
-              alt={book.title} 
-              className="na-cover-image"
-              loading="lazy"
+      {/* STATS */}
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 16,
+          padding: 24,
+          maxWidth: 1200,
+          margin: "0 auto",
+        }}
+      >
+        <StatCard title="Total Categories" value={`${num(totalCategories)}+`} icon="📚" />
+        <StatCard title="Total Books" value={`${num(totalBooks)}+`} icon="📖" />
+        <StatCard title="Active Students" value={num(totalActiveStudents)} icon="🧑‍🎓" />
+        <StatCard title="Issued Books" value={num(issuedCount)} icon="📗" />
+      </section>
+
+      {/* BROWSE BY CATEGORIES */}
+      <SectionTitle
+        title="Browse By Categories"
+        subtitle="Find resources for your courses"
+      />
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+          gap: 18,
+          padding: 24,
+          maxWidth: 1200,
+          margin: "0 auto",
+        }}
+      >
+        {categories.map((c) => (
+          <div
+            key={c.name}
+            style={{
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 12,
+              overflow: "hidden",
+              boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+            }}
+          >
+            <img
+              src={c.image || "/placeholder.jpg"}
+              alt={c.name}
+              style={{ width: "100%", height: 160, objectFit: "cover" }}
+              onError={(e) => (e.currentTarget.src = "/placeholder.jpg")}
             />
+            <div style={{ padding: 14 }}>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{c.name}</div>
+              <div style={{ color: "#6b7280", marginTop: 4 }}>
+                Books: {c.booksCount}
+              </div>
+              <a
+                href={`/category/${encodeURIComponent(c.name)}`}
+                style={{
+                  marginTop: 10,
+                  display: "inline-block",
+                  padding: "8px 12px",
+                  background: "#0d6efd",
+                  color: "#fff",
+                  borderRadius: 8,
+                  textDecoration: "none",
+                  fontWeight: 600,
+                }}
+              >
+                Browse
+              </a>
+            </div>
           </div>
-          <div className="na-book-info">
-            <h3 className="na-book-title">{book.title}</h3>
-            <p className="na-book-author">{book.author}</p>
-            <span className="na-book-category">{book.category}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-</section>
+        ))}
+        {categories.length === 0 && (
+          <div style={{ opacity: 0.7 }}>No categories yet.</div>
+        )}
+      </section>
 
-      
-      <section className="hours-section">
-        <div className="container">
-          <h2 className="section-title">Library Hours</h2>
-          <div className="hours-grid">
-            <div className="hours-card">
-              <FiClock className="hours-icon" />
-              <h3>Regular Hours</h3>
-              <p>Monday - Friday: 8:00 AM - 8:00 PM</p>
-              <p>Saturday: 10:00 AM - 5:00 PM</p>
-              <p>Sunday: Closed</p>
+      {/* NEW ARRIVALS */}
+      <SectionTitle
+        title="New Arrivals"
+        subtitle="Recently added to our collection"
+      />
+      <section
+        style={{
+          background: "#f7f9fc",
+          padding: "28px 24px 40px",
+          marginBottom: 24,
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 18,
+            maxWidth: 1200,
+            margin: "0 auto",
+          }}
+        >
+          {latest.map((b) => (
+            <div
+              key={b._id}
+              style={{
+                background: "#fff",
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                overflow: "hidden",
+                boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+              }}
+            >
+              <img
+                src={b.coverImage || "/placeholder.jpg"}
+                alt={b.title}
+                style={{ width: "100%", height: 260, objectFit: "cover" }}
+                onError={(e) => (e.currentTarget.src = "/placeholder.jpg")}
+              />
+              <div style={{ padding: 14 }}>
+                <div style={{ fontWeight: 700 }}>{b.title}</div>
+                <div style={{ color: "#6b7280", fontSize: 14 }}>{b.author}</div>
+                <span
+                  style={{
+                    display: "inline-block",
+                    marginTop: 8,
+                    background: "#0d6efd",
+                    color: "#fff",
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  {b.category || "General"}
+                </span>
+              </div>
             </div>
-            <div className="hours-card">
-              <FiCalendar className="hours-icon" />
-              <h3>Exam Period</h3>
-              <p>Monday - Sunday: 7:00 AM - 11:00 PM</p>
-            </div>
-          </div>
+          ))}
+          {latest.length === 0 && (
+            <div style={{ opacity: 0.7, padding: 8 }}>No new arrivals yet.</div>
+          )}
         </div>
       </section>
+
+      {/* LIBRARY HOURS */}
+      <SectionTitle title="Library Hours" />
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 18,
+          padding: "0 24px 28px",
+          maxWidth: 900,
+          margin: "0 auto",
+        }}
+      >
+        <HoursCard
+          title="Regular Hours"
+          lines={[
+            "Monday - Friday: 8:00 AM - 8:00 PM",
+            "Saturday: 10:00 AM - 5:00 PM",
+            "Sunday: Closed",
+          ]}
+        />
+        <HoursCard
+          title="Exam Period"
+          lines={["Monday - Sunday: 7:00 AM - 11:00 PM"]}
+        />
+      </section>
+    </div>
+  );
+}
+
+// --- presentational bits ---
+function StatCard({ title, value, icon }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e5e7eb",
+        borderRadius: 12,
+        padding: 18,
+        textAlign: "center",
+        boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+      }}
+    >
+      <div style={{ fontSize: 28, marginBottom: 6 }}>{icon}</div>
+      <div style={{ fontSize: 28, fontWeight: 800 }}>{value}</div>
+      <div style={{ color: "#6b7280", marginTop: 4 }}>{title}</div>
+    </div>
+  );
+}
+
+function SectionTitle({ title, subtitle }) {
+  return (
+    <div style={{ textAlign: "center", padding: "16px 24px 0" }}>
+      <h2 style={{ fontSize: 30, fontWeight: 800, color: "#1f2937" }}>
+        {title}
+      </h2>
+      {subtitle && (
+        <p style={{ color: "#6b7280", marginTop: 6 }}>{subtitle}</p>
+      )}
+    </div>
+  );
+}
+
+function HoursCard({ title, lines }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e5e7eb",
+        borderRadius: 12,
+        padding: 20,
+        textAlign: "center",
+        boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+      }}
+    >
+      <div style={{ fontSize: 24, marginBottom: 8 }}>🕘</div>
+      <div style={{ fontWeight: 700, fontSize: 18 }}>{title}</div>
+      <div style={{ marginTop: 6, color: "#4b5563", lineHeight: 1.6 }}>
+        {lines.map((t, i) => (
+          <div key={i}>{t}</div>
+        ))}
+      </div>
     </div>
   );
 }
