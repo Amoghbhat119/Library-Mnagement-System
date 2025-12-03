@@ -2,6 +2,7 @@ const { UserModel } = require("../model/UserModel");
 const bcrypt = require("bcryptjs");
 const JWT_SECRET = "12345@abcd12";
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 const { BorrowModel } = require("../model/BorrowModel");
 const { BookModel } = require("../model/BookModel");
 const calculateFine = require("../utils/fineCalculator");
@@ -128,41 +129,61 @@ librarianController.returnRequest = async (req, res) => {
   }
 };
 
+
 librarianController.approveReturnRequest = async (req, res) => {
   try {
     const borrowId = req.params.id;
 
-    const borrow = await BorrowModel.findById(borrowId);
-    if (!borrow)
-      return res.status(404).json({ message: "Borrow record not found" });
+    // 1) guard invalid ids
+    if (!mongoose.Types.ObjectId.isValid(borrowId)) {
+      return res.status(400).json({ message: "Invalid borrow id" });
+    }
 
+    // 2) must exist and be 'Requested Return'
+    const borrow = await BorrowModel.findById(borrowId);
+    if (!borrow) {
+      return res.status(404).json({ message: "Borrow record not found" });
+    }
     if (borrow.status !== "Requested Return") {
       return res
         .status(400)
         .json({ message: "Book return not requested or already processed" });
     }
 
+    // 3) book must exist
     const book = await BookModel.findById(borrow.bookId);
-    if (!book) return res.status(404).json({ message: "Book not found" });
-
-    if (book.availableCopies < book.totalCopies) {
-      book.availableCopies += 1;
-      await book.save();
+    if (!book) {
+      return res.status(404).json({ message: "Book not found for this borrow" });
     }
 
+    // 4) safely bump availableCopies (never exceed totalCopies)
+    const total = Number.isFinite(book.totalCopies) ? book.totalCopies : 0;
+    const avail = Number.isFinite(book.availableCopies) ? book.availableCopies : 0;
+    if (avail < total) {
+      book.availableCopies = avail + 1;
+      await book.save();
+    }
+    // if avail >= total: keep it at cap and proceed (idempotent)
+
+    // 5) finalize borrow
     borrow.status = "Returned";
     borrow.returnDate = new Date();
-    borrow.approvedBy = req.userInfo.id;
-
+    if (req.userInfo?.id) borrow.approvedBy = req.userInfo.id;
     await borrow.save();
-    clearCache("homeData");
-    res
-      .status(200)
-      .json({ message: "Book return approved and updated successfully" });
-  } catch (error) {
-    console.error("Error approving return request:", error);
-    res.status(500).json({ message: "Internal Server Error" });
+
+    // 6) never let cache clear crash the request
+    try {
+      if (typeof clearCache === "function") {
+        await Promise.resolve(clearCache("homeData"));
+      }
+    } catch (e) {
+      console.warn("clearCache failed (ignored):", e?.message || e);
+    }
+
+    return res.status(200).json({ message: "Book return approved successfully" });
+  } catch (err) {
+    console.error("approveReturnRequest ERROR:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };
-
 module.exports = { librarianController };
