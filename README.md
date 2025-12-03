@@ -5,13 +5,11 @@
 
 A complete Library Management System built with MongoDB, Express.js, React.js, and Node.js. Features role-based access control with three user types (Admin, Librarian, Student), book management with Cloudinary image uploads, issue/return tracking, and automated fine calculations.
 
-## 🌐 Live Demo
-Check out the live demo of the project:https://library-management-app-karan.vercel.app/
+
 
 **Test Credentials:**
 - Admin: admin@example.com / admin123
-- Librarian: librarian@example.com / lib123
-- Student: student@example.com / student123
+
 
 ## ✨ Key Features
 
@@ -138,6 +136,8 @@ JWT_SECRET=your_jwt_secret_key
 CLOUD_NAME=your_cloud_name
 CLOUD_API_KEY=your_cloud_api_key
 CLOUD_API_SECRET=your_cloud_api_secret
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=admin123
 
 ```
 
@@ -165,13 +165,6 @@ npm run dev
 ```
 ---
 
-
-## 📞 Contact
-Feel free to connect with me through the following platforms:
-
-[![LinkedIn](https://img.shields.io/badge/Karan_Mehta_-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/mehtakaran18)
-[![GitHub](https://img.shields.io/badge/Karan_Mehta_-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/KaranMehta1806)
-[![Email](https://img.shields.io/badge/mehtakaran8872@gmail.com-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:mehtakaran8872@gmail.com)
 
 
 
