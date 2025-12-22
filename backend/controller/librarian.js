@@ -1,14 +1,12 @@
-const { UserModel } = require("../model/UserModel");
-const bcrypt = require("bcryptjs");
-const JWT_SECRET = "12345@abcd12";
-const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const { BorrowModel } = require("../model/BorrowModel");
 const { BookModel } = require("../model/BookModel");
 const calculateFine = require("../utils/fineCalculator");
 const { clearCache } = require("../utils/cache");
+
 const librarianController = {};
 
+/* ===================== ISSUED BOOKS ===================== */
 librarianController.bookIssued = async (req, res) => {
   try {
     const requests = await BorrowModel.find({ status: "Issued" })
@@ -16,15 +14,17 @@ librarianController.bookIssued = async (req, res) => {
       .populate("bookId", "title")
       .sort({ createdAt: -1 });
 
-    res
-      .status(200)
-      .json({ message: "Requested books fetched successfully", requests });
+    res.status(200).json({
+      message: "Issued books fetched successfully",
+      requests,
+    });
   } catch (err) {
-    console.error("Error fetching requests", err);
+    console.error("Error fetching issued books", err);
     res.status(500).json({ error: "Server error" });
   }
 };
 
+/* ===================== ISSUE REQUESTS ===================== */
 librarianController.issueRequest = async (req, res) => {
   try {
     const requests = await BorrowModel.find({ status: "Requested" })
@@ -32,81 +32,79 @@ librarianController.issueRequest = async (req, res) => {
       .populate("bookId", "title")
       .sort({ createdAt: -1 });
 
-    res
-      .status(200)
-      .json({ message: "Requested books fetched successfully", requests });
+    res.status(200).json({
+      message: "Issue requests fetched successfully",
+      requests,
+    });
   } catch (err) {
-    console.error("Error fetching requests", err);
+    console.error("Error fetching issue requests", err);
     res.status(500).json({ error: "Server error" });
   }
 };
 
+/* ===================== APPROVE ISSUE ===================== */
 librarianController.approveRequest = async (req, res) => {
-  const requestId = req.params.id;
-
   try {
-    // 1) Load borrow
-    const borrowRequest = await BorrowModel.findById(requestId);
-    if (!borrowRequest) {
-      return res.status(404).json({ error: "Borrow request not found" });
+    const borrowId = req.params.id;
+
+    if (!mongoose.Types.ObjectId.isValid(borrowId)) {
+      return res.status(400).json({ message: "Invalid borrow id" });
     }
 
-    // Only approve if it's actually a "Requested"
-    if (borrowRequest.status !== "Requested") {
-      return res.status(400).json({ error: `Cannot approve request in status "${borrowRequest.status}"` });
+    const borrow = await BorrowModel.findById(borrowId);
+    if (!borrow) {
+      return res.status(404).json({ message: "Borrow request not found" });
     }
 
-    // 2) Check user's issued count
+    if (borrow.status !== "Requested") {
+      return res.status(400).json({
+        message: `Cannot approve request in status "${borrow.status}"`,
+      });
+    }
+
     const issuedCount = await BorrowModel.countDocuments({
-      userId: borrowRequest.userId,
+      userId: borrow.userId,
       status: "Issued",
     });
+
     if (issuedCount >= 4) {
-      return res.status(400).json({ error: "User already has 4 issued books" });
+      return res.status(400).json({
+        message: "User already has 4 issued books",
+      });
     }
 
-    // 3) Load book
-    const book = await BookModel.findById(borrowRequest.bookId);
-    if (!book) {
-      return res.status(404).json({ error: "Book not found" });
+    const book = await BookModel.findById(borrow.bookId);
+    if (!book || book.availableCopies < 1) {
+      return res.status(400).json({
+        message: "Book not available",
+      });
     }
 
-    // Normalize availableCopies if missing/invalid
-    let available = Number.isFinite(book.availableCopies)
-      ? Number(book.availableCopies)
-      : Number(book.totalCopies ?? 0);
+    // approve borrow
+    borrow.status = "Issued";
+    borrow.issueDate = new Date();
+    borrow.dueDate = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+    borrow.approvedBy = req.userInfo?.id || null;
+    await borrow.save();
 
-    if (!Number.isFinite(available)) available = 0;
-
-    if (available < 1) {
-      return res.status(400).json({ error: "No copies available" });
-    }
-
-    // 4) Approve the borrow
-    borrowRequest.status = "Issued";
-    borrowRequest.issueDate = new Date();
-    // standard: 15 days loan
-    borrowRequest.dueDate = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
-    borrowRequest.approvedBy = req.userInfo?.id;
-
-    // Save borrow first (so we know it's valid)
-    await borrowRequest.save();
-
-    // 5) Atomically decrement availableCopies to avoid NaN races
+    // decrement available copies (NO save, NO validation)
     await BookModel.updateOne(
-      { _id: book._id, availableCopies: { $gte: 1 } },
+      { _id: book._id },
       { $inc: { availableCopies: -1 } }
     );
 
     clearCache("homeData");
-    return res.status(200).json({ message: "Book issued successfully", borrow: borrowRequest });
+    res.status(200).json({
+      message: "Book issued successfully",
+      borrow,
+    });
   } catch (err) {
-    console.error("Error approving request:", err);
-    return res.status(500).json({ error: "Server error", details: err.message });
+    console.error("approveRequest ERROR:", err);
+    res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
-
+/* ===================== RETURN REQUESTS ===================== */
 librarianController.returnRequest = async (req, res) => {
   try {
     const requests = await BorrowModel.find({ status: "Requested Return" })
@@ -114,76 +112,66 @@ librarianController.returnRequest = async (req, res) => {
       .populate("bookId", "title")
       .sort({ createdAt: -1 });
 
-    const requestsWithFine = requests.map((req) => {
-      const fine = calculateFine(req.dueDate, req.returnDate);
-      return { ...req.toObject(), fine };
+    const requestsWithFine = requests.map((item) => {
+      const fine = calculateFine(item.dueDate, item.returnDate);
+      return { ...item.toObject(), fine };
     });
 
     res.status(200).json({
-      message: "Requested books fetched successfully",
+      message: "Return requests fetched successfully",
       requests: requestsWithFine,
     });
   } catch (err) {
-    console.error("Error fetching requests", err);
+    console.error("Error fetching return requests", err);
     res.status(500).json({ error: "Server error" });
   }
 };
 
-
+/* ===================== APPROVE RETURN ===================== */
 librarianController.approveReturnRequest = async (req, res) => {
   try {
     const borrowId = req.params.id;
 
-    // 1) guard invalid ids
     if (!mongoose.Types.ObjectId.isValid(borrowId)) {
       return res.status(400).json({ message: "Invalid borrow id" });
     }
 
-    // 2) must exist and be 'Requested Return'
     const borrow = await BorrowModel.findById(borrowId);
     if (!borrow) {
       return res.status(404).json({ message: "Borrow record not found" });
     }
+
     if (borrow.status !== "Requested Return") {
-      return res
-        .status(400)
-        .json({ message: "Book return not requested or already processed" });
+      return res.status(400).json({
+        message: "Book return not requested or already processed",
+      });
     }
 
-    // 3) book must exist
-    const book = await BookModel.findById(borrow.bookId);
-    if (!book) {
-      return res.status(404).json({ message: "Book not found for this borrow" });
-    }
+    // increment available copies safely (NO book.save())
+    await BookModel.updateOne(
+      { _id: borrow.bookId },
+      { $inc: { availableCopies: 1 } }
+    );
 
-    // 4) safely bump availableCopies (never exceed totalCopies)
-    const total = Number.isFinite(book.totalCopies) ? book.totalCopies : 0;
-    const avail = Number.isFinite(book.availableCopies) ? book.availableCopies : 0;
-    if (avail < total) {
-      book.availableCopies = avail + 1;
-      await book.save();
-    }
-    // if avail >= total: keep it at cap and proceed (idempotent)
-
-    // 5) finalize borrow
+    // finalize borrow
     borrow.status = "Returned";
     borrow.returnDate = new Date();
-    if (req.userInfo?.id) borrow.approvedBy = req.userInfo.id;
+    borrow.approvedBy = req.userInfo?.id || null;
     await borrow.save();
 
-    // 6) never let cache clear crash the request
     try {
-      if (typeof clearCache === "function") {
-        await Promise.resolve(clearCache("homeData"));
-      }
+      clearCache("homeData");
     } catch (e) {
-      console.warn("clearCache failed (ignored):", e?.message || e);
+      console.warn("Cache clear failed (ignored)");
     }
 
-    return res.status(200).json({ message: "Book return approved successfully" });
+    res.status(200).json({
+      message: "Book return approved successfully",
+    });
   } catch (err) {
     console.error("approveReturnRequest ERROR:", err);
-    return res.status(500).json({ message: "Internal Server Error" });
+    res.status(500).json({ message: "Internal Server Error" });
   }
 };
+
 module.exports = { librarianController };
